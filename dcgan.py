@@ -22,76 +22,91 @@ Z_DIM = 100
 
 train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
 
-def make_generator_model():
+
+
+def make_generator_model(dcgan: bool):
     model = tf.keras.Sequential()
 
-    model.add(layers.Dense(7*7*256, use_bias=False, input_shape=(Z_DIM,)))
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU())
+    if dcgan:
+        model.add(layers.Dense(7*7*256, use_bias=False, input_shape=(Z_DIM,)))
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
 
-    model.add(layers.Reshape((7, 7, 256)))
-    assert model.output_shape == (None, 7, 7, 256)
+        model.add(layers.Reshape((7, 7, 256)))
+        assert model.output_shape == (None, 7, 7, 256)
 
-    model.add(layers.Conv2DTranspose(128, (5, 5), strides=(1, 1), padding="same", use_bias=False))
-    assert model.output_shape == (None, 7, 7, 128)
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU())
+        model.add(layers.Conv2DTranspose(128, (5, 5), strides=(1, 1), padding="same", use_bias=False))
+        assert model.output_shape == (None, 7, 7, 128)
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding="same", use_bias=False))
-    assert model.output_shape == (None, 14, 14, 64)
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU())
+        model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding="same", use_bias=False))
+        assert model.output_shape == (None, 14, 14, 64)
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(1, (5, 5), strides=(2, 2), padding="same", use_bias=False))
-    assert model.output_shape == (None, 28, 28, 1)
+        model.add(layers.Conv2DTranspose(1, (5, 5), strides=(2, 2), padding="same", use_bias=False))
+        assert model.output_shape == (None, 28, 28, 1)
+    else:
+        model.add(layers.Dense(7*7*256, use_bias=False, input_shape=(Z_DIM,)))
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
+
+        model.add(layers.Dense(28*28, use_bias=False))
+        model.add(layers.Reshape((28, 28, 1)))
 
     return model
 
-generator = make_generator_model()
-
-noise = tf.random.normal([1, 100])
-generated_image = generator(noise, training=False)
-
-# plt.imshow(generated_image[0, ..., 0], cmap="gray")
-# plt.show()
-
-def make_discriminator_model():
+def make_discriminator_model(dcgan: bool):
     model = tf.keras.Sequential()
 
-    model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding="same", input_shape=[28, 28, 1]))
-    model.add(layers.LeakyReLU())
-    model.add(layers.Dropout(0.3))
+    if dcgan:
+        model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding="same", input_shape=[28, 28, 1]))
+        model.add(layers.LeakyReLU())
+        model.add(layers.Dropout(0.3))
 
-    model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding="same"))
-    model.add(layers.LeakyReLU())
-    model.add(layers.Dropout(0.3))
+        model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding="same"))
+        model.add(layers.LeakyReLU())
+        model.add(layers.Dropout(0.3))
 
-    model.add(layers.Flatten())
+        model.add(layers.Flatten())
+    else:
+        model.add(layers.Dense(512, input_shape=[28, 28, 1]))
+        model.add(layers.LeakyReLU())
+
+        model.add(layers.Dense(512))
+        model.add(layers.LeakyReLU())
+
     model.add(layers.Dense(1))
 
     return model
 
-discriminator = make_discriminator_model()
-decision = discriminator(generated_image)
-print(decision)
+
+USE_DCGAN = False
+USE_WGAN_LOSS = True
+
+generator = make_generator_model(USE_DCGAN)
+discriminator = make_discriminator_model(USE_DCGAN)
 
 cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
+def discriminator_loss(real_output, fake_output, wgan_loss: bool):
+    if wgan_loss:
+        return tf.reduce_mean(real_output - fake_output)
+    else:
+        real_loss = cross_entropy(tf.ones_like(real_output), real_output)
+        fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
 
-def discriminator_loss(real_output, fake_output):
-    # real_loss = cross_entropy(tf.ones_like(real_output), real_output)
-    # fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
-    #
-    # loss = real_loss + fake_loss
-    #
-    # return loss
+        loss = real_loss + fake_loss
 
-    return tf.reduce_mean(real_output - fake_output)
+        return loss
 
-def generator_loss(fake_output):
-    # return cross_entropy(tf.ones_like(fake_output), fake_output)
+def generator_loss(fake_output, wgan_loss: bool):
+    if wgan_loss:
+        return tf.reduce_mean(fake_output)
+    else:
+        return cross_entropy(tf.ones_like(fake_output), fake_output)
 
-    return tf.reduce_mean(fake_output)
 
 generator_optimizer = tf.keras.optimizers.Adam(1e-4)
 discriminator_optimizer = tf.keras.optimizers.Adam(1e-4)
@@ -119,7 +134,7 @@ def train_step(critic_batches, generator_batches):
             real_output = discriminator(critic_images, training=True)
             fake_output = discriminator(generated_images, training=True)
 
-            disc_loss = discriminator_loss(real_output, fake_output)
+            disc_loss = discriminator_loss(real_output, fake_output, USE_WGAN_LOSS)
 
         discriminator_grad = critic_tape.gradient(disc_loss, discriminator.trainable_variables)
         discriminator_optimizer.apply_gradients(zip(discriminator_grad, discriminator.trainable_variables))
@@ -128,7 +143,7 @@ def train_step(critic_batches, generator_batches):
             tf.clip_by_value(variable, -0.01, 0.01)
 
     # TODO: unnecessary, we don't need reals for training G
-    for generator_images in critic_batches:
+    for generator_images in generator_batches:
         noise = tf.random.normal([BATCH_SIZE, Z_DIM])
 
         with tf.GradientTape() as gen_tape:
@@ -137,7 +152,7 @@ def train_step(critic_batches, generator_batches):
             # real_output = discriminator(images, training=True)
             fake_output = discriminator(generated_images, training=True)
 
-            gen_loss = generator_loss(fake_output)
+            gen_loss = generator_loss(fake_output, USE_WGAN_LOSS)
 
         generator_grad = gen_tape.gradient(gen_loss, generator.trainable_variables)
 
@@ -151,8 +166,6 @@ def train(dataset, epochs, start_epoch = 0):
         epoch_start = time.time()
 
         critic_iters = 5
-
-        # __import__('ipdb').set_trace()
 
         iterator = iter(dataset)
 
