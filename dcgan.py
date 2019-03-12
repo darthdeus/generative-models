@@ -79,15 +79,19 @@ cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
 
 def discriminator_loss(real_output, fake_output):
-    real_loss = cross_entropy(tf.ones_like(real_output), real_output)
-    fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
+    # real_loss = cross_entropy(tf.ones_like(real_output), real_output)
+    # fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
+    #
+    # loss = real_loss + fake_loss
+    #
+    # return loss
 
-    loss = real_loss + fake_loss
-
-    return loss
+    return tf.reduce_mean(real_output - fake_output)
 
 def generator_loss(fake_output):
-    return cross_entropy(tf.ones_like(fake_output), fake_output)
+    # return cross_entropy(tf.ones_like(fake_output), fake_output)
+
+    return tf.reduce_mean(fake_output)
 
 generator_optimizer = tf.keras.optimizers.Adam(1e-4)
 discriminator_optimizer = tf.keras.optimizers.Adam(1e-4)
@@ -105,32 +109,64 @@ num_examples_to_generate = 16
 seed = tf.random.normal([num_examples_to_generate, Z_DIM])
 
 @tf.function
-def train_step(images):
-    noise = tf.random.normal([BATCH_SIZE, Z_DIM])
+def train_step(critic_batches, generator_batches):
+    for critic_images in critic_batches:
+        noise = tf.random.normal([BATCH_SIZE, Z_DIM])
 
-    with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
-        generated_images = generator(noise, training=True)
+        with tf.GradientTape() as critic_tape:
+            generated_images = generator(noise, training=True)
 
-        real_output = discriminator(images, training=True)
-        fake_output = discriminator(generated_images, training=True)
+            real_output = discriminator(critic_images, training=True)
+            fake_output = discriminator(generated_images, training=True)
 
-        gen_loss = generator_loss(fake_output)
-        disc_loss = discriminator_loss(real_output, fake_output)
+            disc_loss = discriminator_loss(real_output, fake_output)
 
-    generator_grad = gen_tape.gradient(gen_loss, generator.trainable_variables)
-    discriminator_grad = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
+        discriminator_grad = critic_tape.gradient(disc_loss, discriminator.trainable_variables)
+        discriminator_optimizer.apply_gradients(zip(discriminator_grad, discriminator.trainable_variables))
 
-    generator_optimizer.apply_gradients(zip(generator_grad, generator.trainable_variables))
-    discriminator_optimizer.apply_gradients(zip(discriminator_grad, discriminator.trainable_variables))
+        for variable in discriminator.trainable_variables:
+            tf.clip_by_value(variable, -0.01, 0.01)
+
+    # TODO: unnecessary, we don't need reals for training G
+    for generator_images in critic_batches:
+        noise = tf.random.normal([BATCH_SIZE, Z_DIM])
+
+        with tf.GradientTape() as gen_tape:
+            generated_images = generator(noise, training=True)
+
+            # real_output = discriminator(images, training=True)
+            fake_output = discriminator(generated_images, training=True)
+
+            gen_loss = generator_loss(fake_output)
+
+        generator_grad = gen_tape.gradient(gen_loss, generator.trainable_variables)
+
+        generator_optimizer.apply_gradients(zip(generator_grad, generator.trainable_variables))
 
 
 def train(dataset, epochs, start_epoch = 0):
-    for epoch in range(start_epoch, start_epoch + epochs):
-        start = time.time()
+    train_start = time.time()
 
-        for image_batch in dataset:
-            print(".", end="", flush=True)
-            train_step(image_batch)
+    for epoch in range(start_epoch, start_epoch + epochs):
+        epoch_start = time.time()
+
+        critic_iters = 5
+
+        # __import__('ipdb').set_trace()
+
+        iterator = iter(dataset)
+
+        while True:
+            try:
+                critic_batches = [next(iterator) for _ in range(critic_iters)]
+                generator_batches = [next(iterator)]
+
+                print(".", end="", flush=True)
+
+                # TODO: unshuffle & take N + 1 separately?
+                train_step(critic_batches, generator_batches)
+            except StopIteration:
+                break
 
         display.clear_output(wait=True)
 
@@ -140,7 +176,8 @@ def train(dataset, epochs, start_epoch = 0):
             print("Checkpoint saved", file=sys.stderr)
             checkpoint.save(file_prefix = checkpoint_prefix)
 
-        print("Time for epoch {} is {}".format(epoch + 1, time.time() - start))
+        curr_time = time.time()
+        print("{:04d} - T (total): {:.2f}\tT/epoch: {:.2f}".format(epoch + 1, curr_time - train_start, curr_time - epoch_start))
 
     display.clear_output(wait=True)
     generate_and_save_images(generator, epochs, seed)
