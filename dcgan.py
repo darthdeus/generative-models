@@ -82,7 +82,7 @@ def make_discriminator_model(dcgan: bool):
     return model
 
 
-USE_DCGAN = False
+USE_DCGAN = True
 USE_WGAN_LOSS = True
 
 generator = make_generator_model(USE_DCGAN)
