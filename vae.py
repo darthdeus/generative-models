@@ -101,15 +101,6 @@ def compute_loss(model, x):
     logqz_x = log_normal_pdf(z, mean, logvar)
     return -tf.reduce_mean(logpx_z + logpz - logqz_x)
 
-def compute_gradients(model, x):
-    with tf.GradientTape() as tape:
-        loss = compute_loss(model, x)
-
-    return tape.gradient(loss, model.trainable_variables), loss
-
-def apply_gradients(optimizer, gradients, variables):
-    optimizer.apply_gradients(zip(gradients, variables))
-
 epochs = 100
 latent_dim = 50
 num_examples_to_generate = 16
@@ -127,7 +118,7 @@ def generate_and_save_images(model, epoch, test_input):
         plt.imshow(predictions[i, ..., 0], cmap="gray")
         plt.axis("off")
 
-    plt.savefig("image_at_epoch_{:04d}.png".format(epoch))
+    plt.savefig("tmp/image_at_epoch_{:04d}.png".format(epoch))
     # plt.show()
 
 generate_and_save_images(model, 0, random_vector_for_generation)
@@ -136,8 +127,13 @@ for epoch in range(1, epochs + 1):
     start_time = time.time()
 
     for train_x in train_dataset:
-        gradients, loss = compute_gradients(model, train_x)
-        apply_gradients(optimizer, gradients, model.trainable_variables)
+        with tf.GradientTape() as tape:
+            loss = compute_loss(model, train_x)
+
+        gradients = tape.gradient(loss, model.trainable_variables)
+
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
 
     end_time = time.time()
 
